@@ -27,3 +27,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# wedgelab demo output (python sandbox.py demo)
+out/
