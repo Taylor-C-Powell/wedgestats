@@ -24,7 +24,7 @@ from wedgelab.export import read_session, save_figure, to_script, write_session
 from wedgelab.formula import Formula, FormulaError
 from wedgelab.models import FitError
 from wedgelab.plot import render
-from wedgelab.qq import QQResult, compute
+from wedgelab.qq import QQResult, compute, resolve_envelope
 
 from wedgelab.gui.panels import (
     DataPanel,
@@ -187,7 +187,7 @@ class WedgeLabApp:
         self._busy = True
         try:
             spec = self.state.to_spec()
-            if spec.envelope == "bootstrap":
+            if resolve_envelope(spec.envelope, spec.fit_method) == "bootstrap":
                 self.status.info(f"running {spec.bootstrap_reps} bootstrap replicates...")
                 self.root.update_idletasks()
             result = compute(spec)

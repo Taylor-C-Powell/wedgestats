@@ -13,6 +13,7 @@ from wedgelab.qq import (
     check_positions,
     compute,
     evaluate_positions,
+    resolve_envelope,
 )
 
 
@@ -164,16 +165,80 @@ class TestEnvelopes:
             compute(base.replace(random_state=2)).lower,
         )
 
-    def test_pointwise_envelopes_broadly_agree(self):
-        """Exact, asymptotic, and bootstrap answer the same question."""
-        data = normal_sample(200, seed=4)
-        counts = {}
+    def test_pointwise_envelopes_agree_for_a_specified_reference(self):
+        """With nothing estimated, all three answer the same question."""
+        totals = {}
         for envelope in ("beta", "asymptotic", "bootstrap"):
-            r = compute(
-                QQSpec(data=data, envelope=envelope, bootstrap_reps=300, random_state=1)
+            total = 0
+            for seed in range(5):
+                data = np.random.default_rng(seed).normal(0.0, 1.0, 150)
+                total += compute(
+                    QQSpec(
+                        data=data,
+                        envelope=envelope,
+                        fit_method="manual",
+                        manual_params=(0.0, 1.0),
+                        bootstrap_reps=200,
+                        random_state=1,
+                    )
+                ).diagnostics.outside_band
+            totals[envelope] = total
+        assert max(totals.values()) - min(totals.values()) <= 20, totals
+
+    def test_beta_underflags_against_bootstrap_when_parameters_are_estimated(self):
+        """The bands diverge once the reference is fitted -- and must.
+
+        A Beta band built on estimated parameters is fitted to the data it is
+        judging, so it flags far less than the calibrated bootstrap band.  An
+        earlier version of this suite asserted the three bands agreed here;
+        they only appeared to because the bootstrap was discarding its refit.
+        """
+        beta_total = boot_total = 0
+        for seed in range(6):
+            data = np.random.default_rng(seed).normal(10.0, 2.0, 150)
+            beta_total += compute(
+                QQSpec(data=data, envelope="beta", fit_method="mle")
+            ).diagnostics.outside_band
+            boot_total += compute(
+                QQSpec(
+                    data=data,
+                    envelope="bootstrap",
+                    fit_method="mle",
+                    bootstrap_reps=300,
+                    random_state=1,
+                )
+            ).diagnostics.outside_band
+        assert boot_total > beta_total, (beta_total, boot_total)
+
+    def test_bootstrap_restores_calibration_under_estimation(self):
+        """The whole justification for the 'auto' default, asserted directly.
+
+        Measured over 50 replicates at n=100: Beta+MLE averages 0.24
+        excursions where alpha*n is 5.0; the pivotal bootstrap averages 5.38.
+        The bounds here are wide enough to survive Monte Carlo noise at the
+        smaller replicate count a test can afford.
+        """
+        rng = np.random.default_rng(31)
+        beta_counts, boot_counts = [], []
+        for _ in range(16):
+            data = rng.normal(0.0, 1.0, 100)
+            beta_counts.append(
+                compute(
+                    QQSpec(data=data, envelope="beta", fit_method="mle")
+                ).diagnostics.outside_band
             )
-            counts[envelope] = r.diagnostics.outside_band
-        assert max(counts.values()) - min(counts.values()) <= 8, counts
+            boot_counts.append(
+                compute(
+                    QQSpec(
+                        data=data,
+                        envelope="bootstrap",
+                        fit_method="mle",
+                        bootstrap_reps=300,
+                    )
+                ).diagnostics.outside_band
+            )
+        assert np.mean(beta_counts) < 1.5, np.mean(beta_counts)
+        assert np.mean(boot_counts) > 2.0, np.mean(boot_counts)
 
     def test_exact_band_coverage_is_close_to_nominal(self):
         """Under a fully specified model, excursions should track alpha*n."""
@@ -295,21 +360,6 @@ class TestPlottingPositionSensitivity:
         robust = compute(QQSpec(data=data, fit_method="robust"))
         assert mle.diagnostics.ppcc == pytest.approx(robust.diagnostics.ppcc, abs=1e-10)
 
-    def test_positions_matter_more_at_small_n(self):
-        family = symmetric_plotting_position(0.375)
-
-        def spread(n: int) -> float:
-            data = normal_sample(n, seed=3)
-            values = [
-                compute(
-                    QQSpec(data=data, position=family, position_bindings={"a": a})
-                ).diagnostics.ppcc
-                for a in (0.0, 0.5)
-            ]
-            return abs(values[0] - values[1])
-
-        assert spread(12) > spread(400)
-
     def test_exact_median_rank_runs(self):
         result = compute(
             QQSpec(
@@ -326,6 +376,103 @@ class TestPlottingPositionSensitivity:
             position_bindings={"a": 0.44},
         )
         assert "a=0.44" in spec.positions_summary()
+
+
+class TestAutoEnvelope:
+    """'auto' must pick the band that is calibrated for the estimator in use."""
+
+    def test_resolver_picks_beta_for_a_specified_reference(self):
+        assert resolve_envelope("auto", "manual") == "beta"
+
+    @pytest.mark.parametrize("method", ["mle", "moments", "robust"])
+    def test_resolver_picks_bootstrap_for_an_estimated_reference(self, method):
+        assert resolve_envelope("auto", method) == "bootstrap"
+
+    @pytest.mark.parametrize("envelope", ["none", "beta", "asymptotic", "simultaneous"])
+    def test_resolver_passes_through_explicit_choices(self, envelope):
+        assert resolve_envelope(envelope, "mle") == envelope
+
+    def test_auto_is_the_default(self):
+        assert QQSpec(data=normal_sample(30)).envelope == "auto"
+
+    def test_result_records_the_resolved_envelope(self):
+        estimated = compute(QQSpec(data=normal_sample(50), bootstrap_reps=60))
+        assert estimated.spec.envelope == "auto"
+        assert estimated.envelope == "bootstrap"
+
+        specified = compute(
+            QQSpec(data=normal_sample(50), fit_method="manual", manual_params=(10.0, 2.0))
+        )
+        assert specified.envelope == "beta"
+
+    def test_auto_explains_its_choice(self):
+        result = compute(QQSpec(data=normal_sample(50), bootstrap_reps=60))
+        assert any("resolved to 'bootstrap'" in w for w in result.warnings)
+
+    def test_caption_names_the_band_actually_drawn(self):
+        result = compute(QQSpec(data=normal_sample(50), bootstrap_reps=60))
+        assert "bootstrap" in result.caption()
+        assert "auto" not in result.caption()
+
+    def test_beta_under_estimation_warns_with_numbers(self):
+        """The 'conservative' caveat is a 15x effect and must say so."""
+        result = compute(QQSpec(data=normal_sample(50), envelope="beta", fit_method="mle"))
+        warning = next(w for w in result.warnings if "fully specified reference" in w)
+        assert "0.4" in warning and "bootstrap" in warning
+
+    def test_auto_selects_the_calibrated_band(self):
+        """Calibration itself is asserted in TestEnvelopes; here just the wiring."""
+        result = compute(QQSpec(data=normal_sample(80), fit_method="mle", bootstrap_reps=200))
+        assert result.envelope == "bootstrap"
+        assert result.diagnostics.expected_outside == pytest.approx(0.05 * 80)
+
+
+class TestPositionSensitivityIsConstantInN:
+    """Locks in a measured fact that an earlier narrative got backwards."""
+
+    @staticmethod
+    def _fan_ratio(n: int, seed: int) -> float:
+        family = symmetric_plotting_position(0.375)
+        data = np.random.default_rng(seed).normal(0.0, 1.0, n)
+        base = QQSpec(
+            data=data,
+            position=family,
+            envelope="beta",
+            fit_method="manual",
+            manual_params=(0.0, 1.0),
+        )
+        curves = [
+            compute(base.replace(position_bindings={"a": a})).theoretical
+            for a in (0.0, 0.25, 0.5)
+        ]
+        stack = np.vstack(curves)
+        band = compute(base.replace(position_bindings={"a": 0.375}))
+        return float(np.max((stack.max(0) - stack.min(0)) / (band.upper - band.lower)))
+
+    def test_ratio_does_not_shrink_with_n(self):
+        small = np.mean([self._fan_ratio(15, s) for s in range(4)])
+        large = np.mean([self._fan_ratio(200, s) for s in range(4)])
+        # Measured at 13-15% across n = 10..300; assert it stays in that band
+        # rather than decaying, which is what the corrected narrative claims.
+        assert 0.08 < small < 0.20
+        assert 0.08 < large < 0.20
+        assert large > 0.5 * small
+
+    def test_ppcc_spread_does_shrink_with_n(self):
+        """The other metric genuinely does shrink -- both facts are true."""
+        family = symmetric_plotting_position(0.375)
+
+        def spread(n: int) -> float:
+            data = normal_sample(n, seed=3)
+            values = [
+                compute(
+                    QQSpec(data=data, position=family, position_bindings={"a": a}, envelope="none")
+                ).diagnostics.ppcc
+                for a in (0.0, 0.5)
+            ]
+            return abs(values[0] - values[1])
+
+        assert spread(15) > spread(400)
 
 
 class TestPositionValidation:
@@ -408,6 +555,28 @@ class TestDiagnosticsContent:
         heavy = compute(QQSpec(data=rng.standard_t(2, 200)))
         assert heavy.diagnostics.ppcc < light.diagnostics.ppcc
 
-    def test_expected_outside_tracks_alpha(self):
-        result = compute(QQSpec(data=normal_sample(200), envelope="beta", alpha=0.10))
+    def test_expected_outside_tracks_alpha_when_calibrated(self):
+        result = compute(
+            QQSpec(
+                data=normal_sample(200),
+                envelope="beta",
+                alpha=0.10,
+                fit_method="manual",
+                manual_params=(10.0, 2.0),
+            )
+        )
         assert result.diagnostics.expected_outside == pytest.approx(20.0)
+
+    def test_expected_outside_is_withheld_when_the_band_is_not_calibrated(self):
+        """alpha*n is wrong for a Beta band fitted to its own data."""
+        result = compute(
+            QQSpec(data=normal_sample(200), envelope="beta", alpha=0.10, fit_method="mle")
+        )
+        assert result.diagnostics.expected_outside == 0.0
+        assert any("not calibrated" in w or "calibrated band" in w for w in result.warnings)
+
+    def test_bootstrap_reports_an_expected_count(self):
+        result = compute(
+            QQSpec(data=normal_sample(60), envelope="bootstrap", bootstrap_reps=60, alpha=0.10)
+        )
+        assert result.diagnostics.expected_outside == pytest.approx(6.0)

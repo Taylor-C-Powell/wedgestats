@@ -57,6 +57,7 @@ _LINE_LABELS = {
 }
 
 _ENVELOPE_LABELS = {
+    "auto": "Auto (calibrated for the estimator)",
     "none": "None",
     "beta": "Exact pointwise (Beta)",
     "asymptotic": "Asymptotic pointwise",

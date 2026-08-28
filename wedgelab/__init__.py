@@ -50,7 +50,7 @@ from wedgelab.knowledge import (
 )
 from wedgelab.models import DISTRIBUTIONS, DistributionSpec, FitError, FitResult, fit
 from wedgelab.plot import PlotOptions, render
-from wedgelab.qq import Diagnostics, QQResult, QQSpec, compute
+from wedgelab.qq import Diagnostics, QQResult, QQSpec, compute, resolve_envelope
 from wedgelab.theme import THEMES, Theme, get_theme, theme_keys
 
 __all__ = [
@@ -76,6 +76,7 @@ __all__ = [
     "QQResult",
     "Diagnostics",
     "compute",
+    "resolve_envelope",
     # presentation
     "Theme",
     "THEMES",

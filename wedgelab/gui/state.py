@@ -49,11 +49,11 @@ class AppState:
     position_source: str = "pp_blom"
 
     line: str = "ols"
-    envelope: str = "beta"
+    envelope: str = "auto"
     alpha: float = 0.05
     standardize: bool = False
     detrend: bool = False
-    bootstrap_reps: int = 400
+    bootstrap_reps: int = 500
     random_state: int = 0
 
     theme_key: str = "screen"

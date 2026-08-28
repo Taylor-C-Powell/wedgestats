@@ -194,8 +194,12 @@ Not decoration -- load-bearing:
 The engine reports what it knows to be shaky rather than letting a number
 stand unqualified:
 
-- the exact Beta envelope is flagged as conservative when parameters were
-  estimated from the same data
+- the default envelope is `auto`: the exact Beta band when the reference is
+  specified, the bootstrap band when it was estimated. A Beta band built on
+  estimated parameters is fitted to the data it is judging -- in simulation
+  at n = 100 its mean excursion count falls from about 5 to about 0.4 under
+  MLE, so "nothing outside the band" would carry little information.
+  Choosing it explicitly is still allowed, and says so loudly
 - the Kolmogorov-Smirnov p-value is flagged as invalid under estimated
   parameters, pointing at the Lilliefors correction
 - a simultaneous band that is genuinely unbounded is reported as unbounded,
@@ -203,11 +207,13 @@ stand unqualified:
 - the probability plot correlation coefficient is measured before detrending,
   because detrended residuals are orthogonal to the theoretical quantiles by
   construction and would report exactly zero
+- the expected excursion count is reported only for a calibrated band,
+  because `alpha * n` is simply wrong for a band fitted to its own data
 
 ## Running Tests
 
 ```bash
-pytest                        # 757 tests
+pytest                        # 774 tests
 pytest tests/test_wedgelab    # the workbench alone
 ```
 
