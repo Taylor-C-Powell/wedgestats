@@ -20,7 +20,16 @@ from wedgelab.models import DISTRIBUTIONS
 from wedgelab.qq import QQResult
 from wedgelab.theme import Theme, applied, get_theme
 
-__all__ = ["PlotOptions", "render", "figure_for"]
+__all__ = [
+    "PlotOptions",
+    "render",
+    "render_diagnostic",
+    "figure_for",
+    "draw",
+    "draw_pp",
+    "draw_ecdf",
+    "draw_two_sample",
+]
 
 
 @dataclass(frozen=True)
@@ -357,3 +366,209 @@ def figure_for(result: QQResult, **kwargs: Any) -> Figure:
     """Convenience wrapper around :func:`render` taking keyword options."""
     theme = kwargs.pop("theme", "screen")
     return render(result, theme, PlotOptions(**kwargs))
+
+
+# ---------------------------------------------------------------------------
+# Renderers for the other diagnostics
+#
+# Each mirrors the Q-Q renderer: the figure is fully determined by the result,
+# so the on-screen canvas and the exported file are the same draw call.
+# ---------------------------------------------------------------------------
+
+
+def _points_and_flags(ax, x, y, outside, theme, options, label):
+    """Scatter the conforming points, then the flagged ones. Returns handles."""
+    handles: list[Line2D] = []
+    inside = ~outside if options.mark_outliers else np.ones_like(y, dtype=bool)
+    ax.scatter(
+        x[inside], y[inside], s=theme.marker_size, marker=theme.marker,
+        facecolor=theme.color("point"), edgecolor=theme.color("point_edge"),
+        linewidth=0.3, zorder=4,
+    )
+    handles.append(
+        Line2D([], [], linestyle="none", marker=theme.marker,
+               markerfacecolor=theme.color("point"),
+               markeredgecolor=theme.color("point_edge"),
+               markersize=theme.marker_size**0.5, label=label)
+    )
+    n_out = int(np.sum(outside))
+    if options.mark_outliers and n_out:
+        ax.scatter(
+            x[outside], y[outside], s=theme.marker_size * 1.25, marker=theme.marker,
+            facecolor=theme.color("outlier"), edgecolor=theme.color("point_edge"),
+            linewidth=0.3, zorder=5,
+        )
+        handles.append(
+            Line2D([], [], linestyle="none", marker=theme.marker,
+                   markerfacecolor=theme.color("outlier"),
+                   markeredgecolor=theme.color("point_edge"),
+                   markersize=theme.marker_size**0.5,
+                   label=f"Outside envelope ({n_out})")
+        )
+    return handles
+
+
+def _band(ax, x, lower, upper, theme, alpha, step=False):
+    """Fill a confidence envelope and return its legend handle."""
+    kwargs = {"step": "post"} if step else {}
+    ax.fill_between(x, lower, upper, facecolor=theme.color("band"),
+                    edgecolor="none", zorder=1, **kwargs)
+    return Line2D([], [], color=theme.color("band"), linewidth=5,
+                  label=f"{100 * (1 - alpha):.0f}% envelope")
+
+
+def _finish(ax, theme, options, handles, xlabel, ylabel, annotation):
+    """Labels, spines, annotation box and legend, shared by every renderer."""
+    ax.set_xlabel(options.xlabel or xlabel)
+    ax.set_ylabel(options.ylabel or ylabel)
+    if options.title:
+        ax.set_title(options.title, loc="left")
+    _style_spines(ax, theme)
+    if options.annotate and annotation:
+        ax.text(0.035, 0.965, annotation, transform=ax.transAxes, va="top", ha="left",
+                fontsize=theme.base_pt - 1.0, color=theme.color("annotation"),
+                linespacing=1.45, zorder=6)
+    if options.show_legend and handles:
+        ax.legend(handles=handles, loc=options.legend_loc, fontsize=theme.base_pt - 1.0)
+    return ax
+
+
+def draw_pp(result, ax: Axes, theme: Theme, options: PlotOptions) -> Axes:
+    """Draw a P-P plot: fitted CDF against plotting position, on the unit square."""
+    handles: list[Line2D] = []
+    x, y = result.theoretical, result.empirical
+
+    if options.show_band and result.lower is not None:
+        handles.append(_band(ax, x, result.lower, result.upper, theme, result.spec.alpha))
+
+    if options.show_line:
+        lx, ly = result.line_points()
+        ax.plot(lx, ly, color=theme.color("line"), linewidth=theme.line_width, zorder=3)
+        handles.append(Line2D(
+            [], [], color=theme.color("line"),
+            label="Identity" if result.spec.line == "identity" else "Least squares",
+        ))
+
+    handles += _points_and_flags(ax, x, y, result.outside, theme, options, result.spec.label)
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    return _finish(
+        ax, theme, options, handles,
+        "Theoretical probability",
+        f"Fitted CDF, {DISTRIBUTIONS[result.spec.dist_key].label}",
+        f"$n$ = {result.n}\n$r$ = {result.correlation:.4f}",
+    )
+
+
+def draw_ecdf(result, ax: Axes, theme: Theme, options: PlotOptions) -> Axes:
+    """Draw an empirical CDF with its band and the fitted model overlaid."""
+    handles: list[Line2D] = []
+
+    if options.show_band and result.lower is not None:
+        handle = _band(ax, result.x, result.lower, result.upper, theme,
+                       result.spec.alpha, step=True)
+        kind = "Simultaneous" if result.envelope == "simultaneous" else "Pointwise"
+        handle.set_label(f"{kind} {100 * (1 - result.spec.alpha):.0f}% band")
+        handles.append(handle)
+
+    ax.step(result.x, result.ecdf, where="post", color=theme.color("point"),
+            linewidth=theme.line_width * 1.2, zorder=4)
+    handles.append(Line2D([], [], color=theme.color("point"),
+                          label=f"ECDF, {result.spec.label}"))
+
+    if result.spec.show_model:
+        # The curve is drawn in the flag colour when it leaves the band, so the
+        # verdict is legible without reading the caption.
+        colour = theme.color("line") if result.band_contains_model else theme.color("outlier")
+        ax.plot(result.model_x, result.model_cdf, color=colour, linestyle="--",
+                linewidth=theme.line_width, zorder=5)
+        handles.append(Line2D(
+            [], [], color=colour, linestyle="--",
+            label=f"Fitted {DISTRIBUTIONS[result.spec.dist_key].label}",
+        ))
+
+    ax.set_ylim(-0.02, 1.02)
+    return _finish(
+        ax, theme, options, handles, "Value", "Cumulative probability",
+        f"$n$ = {result.n}\n$D$ = {result.ks_statistic:.4f}",
+    )
+
+
+def draw_two_sample(result, ax: Axes, theme: Theme, options: PlotOptions) -> Axes:
+    """Draw a two-sample Q-Q plot, with no reference distribution involved."""
+    handles: list[Line2D] = []
+    x, y = result.first_quantiles, result.second_quantiles
+
+    if options.show_band and result.lower is not None:
+        handles.append(_band(ax, x, result.lower, result.upper, theme, result.spec.alpha))
+
+    if options.show_line:
+        lx, ly = result.line_points()
+        ax.plot(lx, ly, color=theme.color("line"), linewidth=theme.line_width, zorder=3)
+        handles.append(Line2D([], [], color=theme.color("line"), label={
+            "ols": "Least squares", "quartile": "Quartile line", "identity": "Identity",
+        }[result.spec.line]))
+
+    handles += _points_and_flags(ax, x, y, result.outside, theme, options, "Common quantiles")
+    if options.equal_aspect:
+        ax.set_aspect("equal", adjustable="datalim")
+    return _finish(
+        ax, theme, options, handles,
+        f"Quantiles of {result.spec.first_label}",
+        f"Quantiles of {result.spec.second_label}",
+        f"slope = {result.slope:.3f}\nintercept = {result.intercept:.3f}",
+    )
+
+
+_DRAWERS = {
+    "QQResult": draw,
+    "PPResult": draw_pp,
+    "ECDFResult": draw_ecdf,
+    "TwoSampleResult": draw_two_sample,
+}
+
+
+def render_diagnostic(
+    result: Any,
+    theme: Theme | str = "screen",
+    options: PlotOptions | None = None,
+) -> Figure:
+    """Render any diagnostic result, dispatching on its type.
+
+    Accepts a :class:`~wedgelab.qq.QQResult` or any result from
+    :mod:`wedgelab.diagnostics`, so a caller can switch figure type without
+    switching function.
+
+    Parameters
+    ----------
+    result : QQResult, PPResult, ECDFResult or TwoSampleResult
+        What to draw.
+    theme : Theme or str
+        A theme, or a key into :data:`wedgelab.theme.THEMES`.
+    options : PlotOptions or None
+        Presentation choices.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Sized exactly to the theme's physical dimensions.
+
+    Raises
+    ------
+    TypeError
+        If *result* is not a recognised diagnostic result.
+    """
+    drawer = _DRAWERS.get(type(result).__name__)
+    if drawer is None:
+        raise TypeError(
+            f"cannot render {type(result).__name__}; expected one of "
+            + ", ".join(sorted(_DRAWERS))
+        )
+    resolved = get_theme(theme) if isinstance(theme, str) else theme
+    opts = options or PlotOptions()
+    with applied(resolved):
+        fig = Figure(figsize=resolved.figsize(), dpi=100)
+        ax = fig.add_subplot(111)
+        drawer(result, ax, resolved, opts)
+        fig.tight_layout(pad=0.4)
+    return fig

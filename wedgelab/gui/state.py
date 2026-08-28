@@ -12,12 +12,38 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from wedgelab.datasets import generate
+from wedgelab.diagnostics import ECDFSpec, PPSpec
 from wedgelab.formula import Formula
 from wedgelab.knowledge import symmetric_plotting_position
 from wedgelab.plot import PlotOptions
 from wedgelab.qq import QQSpec
 
-__all__ = ["AppState"]
+__all__ = ["AppState", "FIGURE_TYPES", "ENVELOPES_FOR", "ECDF_ENVELOPE_FOR"]
+
+# Each figure type admits a different envelope vocabulary, because the bands
+# mean different things.  The GUI repopulates its combo from this.
+FIGURE_TYPES: tuple[tuple[str, str], ...] = (
+    ("qq", "Q-Q plot"),
+    ("pp", "P-P plot"),
+    ("ecdf", "Empirical CDF"),
+)
+
+ENVELOPES_FOR: dict[str, tuple[str, ...]] = {
+    "qq": ("auto", "none", "beta", "asymptotic", "simultaneous", "bootstrap"),
+    "pp": ("auto", "none", "beta", "simultaneous", "bootstrap"),
+    "ecdf": ("none", "simultaneous", "pointwise"),
+}
+
+# Carrying a Q-Q envelope choice over to the ECDF, which has its own names.
+ECDF_ENVELOPE_FOR: dict[str, str] = {
+    "none": "none",
+    "auto": "simultaneous",
+    "beta": "pointwise",
+    "bootstrap": "simultaneous",
+    "asymptotic": "pointwise",
+    "simultaneous": "simultaneous",
+    "pointwise": "pointwise",
+}
 
 
 @dataclass
@@ -56,6 +82,7 @@ class AppState:
     bootstrap_reps: int = 500
     random_state: int = 0
 
+    figure_type: str = "qq"
     theme_key: str = "screen"
     options: PlotOptions = field(default_factory=PlotOptions)
 
@@ -81,6 +108,39 @@ class AppState:
             random_state=self.random_state,
             label=self.label,
         )
+
+    def build_spec(self):
+        """Freeze the state into the spec for the currently selected figure.
+
+        Q-Q, P-P and ECDF all read the same data, model and plotting-position
+        controls, so switching between them re-uses every choice already made.
+        """
+        if self.figure_type == "pp":
+            return PPSpec(
+                data=self.data,
+                dist_key=self.dist_key,
+                fit_method=self.fit_method,
+                manual_params=self.manual_params,
+                position=self.position,
+                position_bindings=dict(self.position_bindings),
+                line="identity" if self.line == "theoretical" else "ols",
+                envelope=self.envelope,
+                alpha=self.alpha,
+                bootstrap_reps=self.bootstrap_reps,
+                random_state=self.random_state,
+                label=self.label,
+            )
+        if self.figure_type == "ecdf":
+            return ECDFSpec(
+                data=self.data,
+                dist_key=self.dist_key,
+                fit_method=self.fit_method,
+                manual_params=self.manual_params,
+                envelope=ECDF_ENVELOPE_FOR.get(self.envelope, "simultaneous"),
+                alpha=self.alpha,
+                label=self.label,
+            )
+        return self.to_spec()
 
     def adopt(self, spec: QQSpec, theme_key: str, options: PlotOptions) -> None:
         """Overwrite the state from a restored session."""

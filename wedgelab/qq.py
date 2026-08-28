@@ -43,6 +43,12 @@ __all__ = [
     "evaluate_positions",
     "check_positions",
     "resolve_envelope",
+    "beta_band",
+    "ks_critical",
+    "quantiles",
+    "quantiles_unbounded",
+    "reference_line",
+    "standardise",
     "ENVELOPE_METHODS",
     "LINE_METHODS",
 ]
@@ -395,12 +401,12 @@ def _plotting_positions(spec: QQSpec, n: int) -> np.ndarray:
     return evaluate_positions(spec.position, n, spec.position_bindings)
 
 
-def _quantiles(dist: ContinuousDistribution, p: np.ndarray) -> np.ndarray:
+def quantiles(dist: ContinuousDistribution, p: np.ndarray) -> np.ndarray:
     """Vectorised inverse CDF using the wedgestats scalar ``ppf``."""
     return np.array([dist.ppf(float(v)) for v in p], dtype=float)
 
 
-def _beta_band(p_lo: float, p_hi: float, n: int) -> tuple[np.ndarray, np.ndarray]:
+def beta_band(p_lo: float, p_hi: float, n: int) -> tuple[np.ndarray, np.ndarray]:
     """Exact probability bounds for every order statistic.
 
     ``U_(i) ~ Beta(i, n - i + 1)`` exactly, so the bounds come straight from
@@ -415,7 +421,7 @@ def _beta_band(p_lo: float, p_hi: float, n: int) -> tuple[np.ndarray, np.ndarray
     return lo, hi
 
 
-def _ks_critical(alpha: float, n: int) -> float:
+def ks_critical(alpha: float, n: int) -> float:
     """Two-sided critical sup-norm distance for a simultaneous band.
 
     Uses the exact two-sided Kolmogorov distribution when SciPy can invert it,
@@ -430,7 +436,7 @@ def _ks_critical(alpha: float, n: int) -> float:
     return float(np.sqrt(-np.log(alpha / 2.0) / (2.0 * n)))
 
 
-def _quantiles_unbounded(dist: ContinuousDistribution, p: np.ndarray) -> np.ndarray:
+def quantiles_unbounded(dist: ContinuousDistribution, p: np.ndarray) -> np.ndarray:
     """Inverse CDF that returns an infinite bound outside ``(0, 1)``.
 
     A simultaneous band genuinely has no finite bound where ``p_i +/- d``
@@ -485,10 +491,10 @@ def _bootstrap_band(
             continue
         try:
             refit = fit(sample, spec.dist_key, spec.fit_method)
-            draws[r] = _standardise(sample, refit)
+            draws[r] = standardise(sample, refit)
         except FitError:
             failures += 1
-            draws[r] = _standardise(sample, fit_result)
+            draws[r] = standardise(sample, fit_result)
 
     lo = np.quantile(draws, spec.alpha / 2.0, axis=0)
     hi = np.quantile(draws, 1.0 - spec.alpha / 2.0, axis=0)
@@ -503,7 +509,7 @@ def _bootstrap_band(
     return lo, hi
 
 
-def _standardise(values: np.ndarray, fit_result: FitResult) -> np.ndarray:
+def standardise(values: np.ndarray, fit_result: FitResult) -> np.ndarray:
     """Map values onto the fitted distribution's z-scale."""
     mu = float(fit_result.dist.mean())
     sigma = float(fit_result.dist.std_dev())
@@ -512,7 +518,7 @@ def _standardise(values: np.ndarray, fit_result: FitResult) -> np.ndarray:
     return (values - mu) / sigma
 
 
-def _reference_line(
+def reference_line(
     method: str,
     theoretical: np.ndarray,
     sample: np.ndarray,
@@ -603,7 +609,7 @@ def compute(spec: QQSpec) -> QQResult:
 
     p = _plotting_positions(spec, n)
     ordered = np.sort(data)
-    theoretical = _quantiles(fit_result.dist, p)
+    theoretical = quantiles(fit_result.dist, p)
 
     if not np.all(np.isfinite(theoretical)):
         raise ValueError(
@@ -616,9 +622,9 @@ def compute(spec: QQSpec) -> QQResult:
     upper_raw: np.ndarray | None = None
 
     if envelope == "beta":
-        p_lo, p_hi = _beta_band(spec.alpha / 2.0, 1.0 - spec.alpha / 2.0, n)
-        lower_raw = _quantiles(fit_result.dist, p_lo)
-        upper_raw = _quantiles(fit_result.dist, p_hi)
+        p_lo, p_hi = beta_band(spec.alpha / 2.0, 1.0 - spec.alpha / 2.0, n)
+        lower_raw = quantiles(fit_result.dist, p_lo)
+        upper_raw = quantiles(fit_result.dist, p_hi)
         if spec.fit_method != "manual":
             warnings.append(
                 "the exact Beta envelope assumes a fully specified reference. "
@@ -630,9 +636,9 @@ def compute(spec: QQSpec) -> QQResult:
                 "envelope='bootstrap' (or 'auto') for a calibrated band"
             )
     elif envelope == "simultaneous":
-        d = _ks_critical(spec.alpha, n)
-        lower_raw = _quantiles_unbounded(fit_result.dist, p - d)
-        upper_raw = _quantiles_unbounded(fit_result.dist, p + d)
+        d = ks_critical(spec.alpha, n)
+        lower_raw = quantiles_unbounded(fit_result.dist, p - d)
+        upper_raw = quantiles_unbounded(fit_result.dist, p + d)
         n_open = int(np.sum(~np.isfinite(lower_raw)) + np.sum(~np.isfinite(upper_raw)))
         if n_open:
             warnings.append(
@@ -645,18 +651,18 @@ def compute(spec: QQSpec) -> QQResult:
 
     # ---- move onto the plotted scale --------------------------------------
     if spec.standardize:
-        sample = _standardise(ordered, fit_result)
-        theoretical = _standardise(theoretical, fit_result)
+        sample = standardise(ordered, fit_result)
+        theoretical = standardise(theoretical, fit_result)
         if lower_raw is not None:
-            lower_raw = _standardise(lower_raw, fit_result)
-            upper_raw = _standardise(upper_raw, fit_result)
+            lower_raw = standardise(lower_raw, fit_result)
+            upper_raw = standardise(upper_raw, fit_result)
     else:
         sample = ordered
 
     if np.ptp(sample) < _EPS:
         raise ValueError("the sample is constant; a Q-Q plot carries no information")
 
-    slope, intercept, r_squared, slope_se, intercept_se = _reference_line(
+    slope, intercept, r_squared, slope_se, intercept_se = reference_line(
         spec.line, theoretical, sample
     )
 
@@ -667,7 +673,7 @@ def compute(spec: QQSpec) -> QQResult:
     # which makes them comparable.
     if envelope == "asymptotic":
         z = float(sp_stats.norm.ppf(1.0 - spec.alpha / 2.0))
-        raw_quantiles = _quantiles(fit_result.dist, p)
+        raw_quantiles = quantiles(fit_result.dist, p)
         density = np.array(
             [max(float(fit_result.dist.pdf(float(q))), _EPS) for q in raw_quantiles]
         )
@@ -679,7 +685,7 @@ def compute(spec: QQSpec) -> QQResult:
             sigma = float(fit_result.dist.std_dev())
             if np.isfinite(sigma) and sigma > 0:
                 se = se / sigma
-            centre = _standardise(raw_quantiles, fit_result)
+            centre = standardise(raw_quantiles, fit_result)
         lower_raw = centre - z * se
         upper_raw = centre + z * se
         if np.any(se > 10.0 * np.ptp(sample)):

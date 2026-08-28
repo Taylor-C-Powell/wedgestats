@@ -23,7 +23,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from wedgelab.export import read_session, save_figure, to_script, write_session
 from wedgelab.formula import Formula, FormulaError
 from wedgelab.models import FitError
-from wedgelab.plot import render
+from wedgelab.diagnostics import compute_ecdf, compute_pp
+from wedgelab.plot import render_diagnostic
 from wedgelab.qq import QQResult, compute, resolve_envelope
 
 from wedgelab.gui.panels import (
@@ -180,17 +181,37 @@ class WedgeLabApp:
         else:
             self._pending = self.root.after(_DEBOUNCE_MS, self._update)
 
+    _COMPUTERS = {"qq": compute, "pp": compute_pp, "ecdf": compute_ecdf}
+
+    @staticmethod
+    def _readout(result) -> list[str]:
+        """Diagnostic lines, wherever a given result type keeps them."""
+        source = getattr(result, "diagnostics", result)
+        return list(source.lines())
+
+    @staticmethod
+    def _headline(result) -> str:
+        """One-line status, using whatever summary statistic the type has."""
+        d = getattr(result, "diagnostics", result)
+        n = getattr(result, "n", None) or getattr(d, "n", 0)
+        for attr, name in (("ppcc", "r"), ("correlation", "r"), ("ks_statistic", "D")):
+            if hasattr(d, attr):
+                return f"n={n}   {name}={getattr(d, attr):.5f}"
+        return f"n={n}"
+
     def _update(self) -> None:
         self._pending = None
         if self._busy:
             return
         self._busy = True
         try:
-            spec = self.state.to_spec()
-            if resolve_envelope(spec.envelope, spec.fit_method) == "bootstrap":
+            spec = self.state.build_spec()
+            if getattr(spec, "bootstrap_reps", None) and resolve_envelope(
+                spec.envelope, getattr(spec, "fit_method", "mle")
+            ) == "bootstrap":
                 self.status.info(f"running {spec.bootstrap_reps} bootstrap replicates...")
                 self.root.update_idletasks()
-            result = compute(spec)
+            result = self._COMPUTERS[self.state.figure_type](spec)
         except (FormulaError, FitError, ValueError) as exc:
             self.status.error(str(exc))
             return
@@ -208,14 +229,11 @@ class WedgeLabApp:
         if result.warnings:
             self.status.warn(result.warnings[0])
         else:
-            self.status.ok(
-                f"n={result.n}   r={result.diagnostics.ppcc:.5f}   "
-                f"{result.spec.positions_summary()}"
-            )
+            self.status.ok(self._headline(result))
 
     def _redraw(self, result: QQResult) -> None:
         """Replace the embedded figure with a freshly rendered one."""
-        figure = render(result, self.state.theme_key, self.state.options)
+        figure = render_diagnostic(result, self.state.theme_key, self.state.options)
         if self._toolbar is not None:
             self._toolbar.destroy()
         if self._canvas is not None:
@@ -229,10 +247,11 @@ class WedgeLabApp:
         self._toolbar.pack(side="bottom", fill="x")
         self._canvas.draw()
 
-    def _write_diagnostics(self, result: QQResult) -> None:
-        lines = list(result.diagnostics.lines())
+    def _write_diagnostics(self, result) -> None:
+        lines = self._readout(result)
         lines.append(f"model: {result.fit.summary()}")
-        lines.append(f"positions: {result.spec.positions_summary()}")
+        if hasattr(result.spec, "positions_summary"):
+            lines.append(f"positions: {result.spec.positions_summary()}")
         lines.extend(f"note: {warning}" for warning in result.warnings)
         self._diagnostics.configure(state="normal")
         self._diagnostics.delete("1.0", "end")
@@ -304,7 +323,7 @@ class WedgeLabApp:
             return
         suffix = Path(path).suffix.lstrip(".").lower() or "pdf"
         try:
-            figure = render(self.last_result, self.state.theme_key, self.state.options)
+            figure = render_diagnostic(self.last_result, self.state.theme_key, self.state.options)
             written = save_figure(figure, path, formats=(suffix,))
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
@@ -313,6 +332,14 @@ class WedgeLabApp:
 
     def _export_script(self) -> None:
         if self.last_result is None:
+            return
+        if self.state.figure_type != "qq":
+            messagebox.showinfo(
+                "Not available yet",
+                "Script export currently covers the Q-Q plot only. Switch the "
+                "figure type back to Q-Q, or use Save session to record this "
+                "specification.",
+            )
             return
         path = filedialog.asksaveasfilename(
             title="Export reproducible script",
@@ -335,6 +362,12 @@ class WedgeLabApp:
         self.status.ok(f"wrote {Path(path).name}")
 
     def _save_session(self) -> None:
+        if self.state.figure_type != "qq":
+            messagebox.showinfo(
+                "Not available yet",
+                "Session files currently record a Q-Q specification only.",
+            )
+            return
         path = filedialog.asksaveasfilename(
             title="Save session", defaultextension=".json", filetypes=[("JSON", "*.json")]
         )

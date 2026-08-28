@@ -301,3 +301,71 @@ class TestExportPaths:
         assert app.data_panel._dataset.key == "contaminated"
         assert app.model_panel._method.key == "robust"
         assert app.presentation_panel._envelope.key == "simultaneous"
+
+
+class TestFigureTypes:
+    """Switching figure type must keep every choice that still applies."""
+
+    @pytest.mark.parametrize("kind", ["qq", "pp", "ecdf"])
+    def test_every_type_computes_and_draws(self, app, kind):
+        app.presentation_panel._on_figure_type(kind)
+        settle(app)
+        assert app.last_result is not None
+        assert type(app.last_result).__name__ in (
+            "QQResult", "PPResult", "ECDFResult",
+        )
+
+    def test_switching_keeps_the_data_and_model(self, app):
+        app.data_panel._on_dataset("heavy")
+        app.model_panel._on_method("robust")
+        settle(app)
+        for kind in ("pp", "ecdf", "qq"):
+            app.presentation_panel._on_figure_type(kind)
+            settle(app)
+            assert app.state.dataset_key == "heavy"
+            assert app.last_result.fit.method == "robust"
+
+    def test_envelope_vocabulary_follows_the_figure(self, app):
+        app.presentation_panel._on_figure_type("ecdf")
+        settle(app)
+        assert app.state.envelope in ("none", "simultaneous", "pointwise")
+        app.presentation_panel._on_figure_type("qq")
+        settle(app)
+        assert app.state.envelope in (
+            "auto", "none", "beta", "asymptotic", "simultaneous", "bootstrap",
+        )
+
+    def test_pp_and_qq_agree_on_the_flagged_count(self, app):
+        """The two are one test on two axes; the readout must not imply otherwise."""
+        app.data_panel._on_dataset("heavy")
+        app.model_panel._on_dist("normal")
+        app.presentation_panel._on_envelope("beta")
+        settle(app)
+        app.presentation_panel._on_figure_type("qq")
+        settle(app)
+        qq_flagged = app.last_result.diagnostics.outside_band
+        app.presentation_panel._on_figure_type("pp")
+        settle(app)
+        assert app.last_result.outside_band == qq_flagged
+
+    def test_script_export_declines_outside_qq(self, app, tmp_path, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(
+            "wedgelab.gui.app.messagebox.showinfo",
+            lambda title, message: seen.setdefault("title", title),
+        )
+        app.presentation_panel._on_figure_type("ecdf")
+        settle(app)
+        app._export_script()
+        assert seen.get("title") == "Not available yet"
+
+    def test_figure_export_works_for_every_type(self, app, tmp_path, monkeypatch):
+        for kind in ("qq", "pp", "ecdf"):
+            target = tmp_path / f"{kind}.png"
+            monkeypatch.setattr(
+                "wedgelab.gui.app.filedialog.asksaveasfilename", lambda **_k: str(target)
+            )
+            app.presentation_panel._on_figure_type(kind)
+            settle(app)
+            app._export_figure()
+            assert target.exists() and target.stat().st_size > 0

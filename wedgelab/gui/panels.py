@@ -24,6 +24,7 @@ from wedgelab.knowledge import KNOWLEDGE
 from wedgelab.models import DISTRIBUTIONS, FIT_METHODS, sample_skewness_hint
 from wedgelab.qq import ENVELOPE_METHODS, LINE_METHODS, check_positions
 from wedgelab.theme import THEMES, get_theme
+from wedgelab.gui.state import ENVELOPES_FOR, FIGURE_TYPES
 
 from wedgelab.gui.widgets import (
     PALETTE,
@@ -56,12 +57,22 @@ _LINE_LABELS = {
     "theoretical": "Theoretical identity",
 }
 
+_FIGURE_NOTES = {
+    "qq": "Quantiles against quantiles. Resolves the tails; crowds the centre.",
+    "pp": "Fitted CDF against plotting position. Resolves the centre and "
+    "flattens the tails. It flags the same points as the Q-Q plot -- a change "
+    "of axis, not a second test.",
+    "ecdf": "The empirical CDF with a band the whole fitted curve must stay "
+    "inside. The figure that supports a claim about the distribution as a whole.",
+}
+
 _ENVELOPE_LABELS = {
     "auto": "Auto (calibrated for the estimator)",
     "none": "None",
     "beta": "Exact pointwise (Beta)",
     "asymptotic": "Asymptotic pointwise",
     "simultaneous": "Simultaneous (KS)",
+    "pointwise": "Pointwise (Beta)",
     "bootstrap": "Parametric bootstrap",
 }
 
@@ -555,6 +566,12 @@ class PresentationPanel(Section):
         super().__init__(parent, "4.  Line, envelope, and theme")
         self.app = app
 
+        self._figure = LabeledCombo(
+            self, list(FIGURE_TYPES), self._on_figure_type, initial=app.state.figure_type
+        )
+        self.add(self._figure, label="Figure")
+        self._figure_note = self.note("")
+
         self._line = LabeledCombo(
             self,
             [(k, _LINE_LABELS[k]) for k in LINE_METHODS],
@@ -645,6 +662,19 @@ class PresentationPanel(Section):
         self.add(self._geometry, span=True)
         self._theme_note = self.note("")
         self._refresh_theme_labels()
+        self._figure_note.configure(text=_FIGURE_NOTES[app.state.figure_type])
+
+    def _on_figure_type(self, key: str) -> None:
+        """Switch figure type, keeping every choice that still applies."""
+        self.app.state.figure_type = key
+        self._figure.set_key(key)
+        allowed = ENVELOPES_FOR[key]
+        self._envelope.replace_pairs([(e, _ENVELOPE_LABELS[e]) for e in allowed])
+        if self.app.state.envelope not in allowed:
+            self.app.state.envelope = allowed[0]
+        self._envelope.set_key(self.app.state.envelope)
+        self._figure_note.configure(text=_FIGURE_NOTES[key])
+        self.app.request_update()
 
     def _on_line(self, key: str) -> None:
         self.app.state.line = key
@@ -696,8 +726,12 @@ class PresentationPanel(Section):
     def sync(self) -> None:
         """Push the current state out to the widgets."""
         state = self.app.state
+        self._figure.set_key(state.figure_type)
+        allowed = ENVELOPES_FOR[state.figure_type]
+        self._envelope.replace_pairs([(e, _ENVELOPE_LABELS[e]) for e in allowed])
         self._line.set_key(state.line)
         self._envelope.set_key(state.envelope)
+        self._figure_note.configure(text=_FIGURE_NOTES[state.figure_type])
         self._theme.set_key(state.theme_key)
         self._reps.set(state.bootstrap_reps)
         self._seed.set(state.random_state)

@@ -33,6 +33,17 @@ Launch the interface with ``python -m wedgelab``.
 
 __version__ = "1.0.0"
 
+from wedgelab.diagnostics import (
+    ECDFResult,
+    ECDFSpec,
+    PPResult,
+    PPSpec,
+    TwoSampleResult,
+    TwoSampleSpec,
+    compute_ecdf,
+    compute_pp,
+    compute_two_sample,
+)
 from wedgelab.datasets import DATASETS, Dataset, dataset_keys, generate, load_file
 from wedgelab.export import (
     read_session,
@@ -49,7 +60,7 @@ from wedgelab.knowledge import (
     symmetric_plotting_position,
 )
 from wedgelab.models import DISTRIBUTIONS, DistributionSpec, FitError, FitResult, fit
-from wedgelab.plot import PlotOptions, render
+from wedgelab.plot import PlotOptions, render, render_diagnostic
 from wedgelab.qq import Diagnostics, QQResult, QQSpec, compute, resolve_envelope
 from wedgelab.theme import THEMES, Theme, get_theme, theme_keys
 
@@ -77,6 +88,16 @@ __all__ = [
     "Diagnostics",
     "compute",
     "resolve_envelope",
+    # other diagnostics
+    "PPSpec",
+    "PPResult",
+    "compute_pp",
+    "ECDFSpec",
+    "ECDFResult",
+    "compute_ecdf",
+    "TwoSampleSpec",
+    "TwoSampleResult",
+    "compute_two_sample",
     # presentation
     "Theme",
     "THEMES",
@@ -84,6 +105,7 @@ __all__ = [
     "theme_keys",
     "PlotOptions",
     "render",
+    "render_diagnostic",
     # data
     "Dataset",
     "DATASETS",
