@@ -260,6 +260,26 @@ def compute_pp(spec: PPSpec) -> PPResult:
     ordered = np.sort(data)
     empirical = _cdf(fit_result.dist, ordered)
 
+    # A Q-Q plot survives a reference on the wrong scale: the quantiles simply
+    # come out far from the data. A P-P plot does not. The CDF saturates, every
+    # observation is assigned the same probability, and the vertical axis
+    # collapses to a point -- taking the correlation with it. wedgestats
+    # StudentT, ChiSquared and FDistribution carry no location or scale, so
+    # this is reachable by choosing one for data that is not already centred.
+    if float(np.ptp(empirical)) < 1e-10:
+        label = fit_result.spec.label
+        remedy = (
+            f"{label} has no location or scale parameter: standardise the data "
+            "first, or choose a reference distribution that has them."
+            if label in ("Student t", "Chi-squared", "F")
+            else "The reference sits on a completely different scale from the data."
+        )
+        raise ValueError(
+            f"the fitted {label} assigns every observation the same probability "
+            f"({float(empirical[0]):.4g}), so a P-P plot carries no information. "
+            + remedy
+        )
+
     lower = upper = None
     if envelope == "beta":
         lower, upper = beta_band(spec.alpha / 2.0, 1.0 - spec.alpha / 2.0, n)

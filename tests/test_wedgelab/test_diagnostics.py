@@ -132,6 +132,39 @@ class TestPPValidation:
         with pytest.raises(ValueError, match="constant"):
             compute_pp(PPSpec(data=np.full(20, 4.0)))
 
+    def test_a_saturating_reference_is_refused_with_the_remedy(self):
+        """StudentT has no location or scale, so its CDF saturates off-centre.
+
+        Reachable from the GUI in two clicks -- pick the P-P plot, pick Student
+        t -- and it used to produce a NaN correlation and a SciPy warning
+        rather than an explanation.
+        """
+        with pytest.raises(ValueError, match="same probability") as excinfo:
+            compute_pp(PPSpec(data=sample(80, mu=100.0, sigma=15.0), dist_key="t"))
+        assert "no location or scale" in str(excinfo.value)
+
+    def test_a_centred_sample_works_against_student_t(self):
+        """The same reference is fine once the data are on its scale."""
+        r = compute_pp(PPSpec(data=sample(80, mu=0.0, sigma=1.0), dist_key="t"))
+        assert np.isfinite(r.correlation)
+        assert r.correlation > 0.9
+
+    @pytest.mark.parametrize("dist_key", list(wl.DISTRIBUTIONS))
+    def test_no_dataset_and_reference_pair_emits_a_warning(self, dist_key):
+        """Nothing reachable from the GUI should warn instead of explaining."""
+        import warnings
+
+        for dataset in wl.dataset_keys():
+            data = wl.generate(dataset, seed=7)
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                try:
+                    compute_pp(PPSpec(data=data, dist_key=dist_key, envelope="none"))
+                except Warning as w:  # pragma: no cover - the thing being prevented
+                    pytest.fail(f"{dataset} vs {dist_key} warned: {w}")
+                except (ValueError, FitError):
+                    pass
+
     def test_drops_non_finite(self):
         data = np.concatenate([sample(40), [np.nan, np.inf]])
         r = compute_pp(PPSpec(data=data))
