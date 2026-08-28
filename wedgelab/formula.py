@@ -571,6 +571,19 @@ class Formula:
 
     # -- presentation -----------------------------------------------------
 
+    def _sympy_locals(self) -> dict:
+        """Map every free symbol to a plain SymPy Symbol.
+
+        Without this, SymPy resolves bare names against its own namespace, so
+        an expression in ``S`` picks up ``sympy.S`` (the singleton registry)
+        and ``E`` picks up Euler's number.  Single capitals are perfectly
+        ordinary variable names -- substrate concentration, a rate constant --
+        so the collision has to be closed off rather than documented.
+        """
+        import sympy
+
+        return {name: sympy.Symbol(name) for name in self.symbols}
+
     def to_latex(self) -> str:
         """Return a LaTeX rendering of the formula.
 
@@ -582,7 +595,7 @@ class Formula:
         try:
             import sympy
 
-            expr = sympy.sympify(self.expression)
+            expr = sympy.sympify(self.expression, locals=self._sympy_locals())
             return f"{self.lhs} = {sympy.latex(expr)}"
         except Exception:
             body = self.expression.replace("*", " \\cdot ")
@@ -593,7 +606,9 @@ class Formula:
         try:
             import sympy
 
-            simple = sympy.simplify(sympy.sympify(self.expression))
+            simple = sympy.simplify(
+                sympy.sympify(self.expression, locals=self._sympy_locals())
+            )
         except Exception as exc:
             raise FormulaError(f"simplification unavailable: {exc}") from exc
         return self.edit(str(simple), name=f"{self.name} (simplified)")
@@ -603,7 +618,10 @@ class Formula:
         try:
             import sympy
 
-            d = sympy.diff(sympy.sympify(self.expression), sympy.Symbol(wrt))
+            d = sympy.diff(
+                sympy.sympify(self.expression, locals=self._sympy_locals()),
+                sympy.Symbol(wrt),
+            )
             text = str(d)
             used = _collect_names(ast.parse(text, mode="eval"))
         except FormulaError:

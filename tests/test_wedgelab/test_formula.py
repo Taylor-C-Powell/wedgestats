@@ -228,6 +228,25 @@ class TestSymbolic:
         ) / (2 * h)
         assert float(d.evaluate(i=3, n=10, a=0.375)) == pytest.approx(approx, abs=1e-5)
 
+    @pytest.mark.parametrize("symbol", ["S", "E", "I", "N", "Q", "O", "beta"])
+    def test_symbols_that_collide_with_sympy_still_differentiate(self, symbol):
+        """Single capitals are ordinary variable names, not SymPy singletons."""
+        f = Formula(name="f", expression=f"2 * {symbol}**2", lhs="y")
+        d = f.derivative(symbol)
+        assert float(d.evaluate(**{symbol: 3.0})) == pytest.approx(12.0)
+
+    def test_colliding_symbol_renders_latex(self):
+        f = Formula(name="MM", expression="Vmax * S / (Km + S)", lhs="v")
+        latex = f.to_latex()
+        assert "frac" in latex, latex
+
+    def test_michaelis_menten_derivative_is_correct(self):
+        f = Formula(name="MM", expression="Vmax * S / (Km + S)", lhs="v")
+        d = f.derivative("S")
+        # d/dS [Vmax*S/(Km+S)] = Vmax*Km/(Km+S)^2
+        expected = 2.0 * 1.5 / (1.5 + 1.0) ** 2
+        assert float(d.evaluate(S=1.0, Vmax=2.0, Km=1.5)) == pytest.approx(expected)
+
     def test_simplified_is_equivalent(self):
         f = Formula(name="f", expression="(i + i) / 2")
         assert float(f.simplified().evaluate(i=7)) == pytest.approx(7.0)
